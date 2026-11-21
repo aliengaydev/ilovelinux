@@ -7,22 +7,13 @@ The task is `~/infra/task.txt`: 11 sections plus a 4-part defense covering archi
 - The plan lives in the repo as `~/infra/PLAN.md`, a checklist I tick off as I go.
 - I **commit and push to GitHub after every major step.**
 
-## Current state (2026-11-21)
-**Server:**
-- Hostname `pop-os`, enp0s8 on 192.168.56.101 (DHCP), passwordless sudo ✅.
-- Docker and Compose are installed; nginx, sshd and dnsmasq aren't yet.
-- Concern: the host was overloaded once. All vCPUs locked up for 27s when the client booted.
-
-**Client:**
-- Pop!_OS at 192.168.56.102, user `scarpetka`, sshd running.
-- My key isn't there yet. You need to run `! ssh-copy-id scarpetka@192.168.56.102`.
-- Passwordless sudo is unverified.
-
-**Repo:**
-- `~/infra` is a git repo on `main`, with `origin = git@github.com:aliengaydev/ilovelinux.git` (SSH auth works) and **0 commits**.
-- Written but not run: `server/lab.env` and `lib.sh` (shared settings and helpers), and the scripts `00-bootstrap` … `07-firewall`.
-- Written config: the nginx vhosts, the page with SSI hostname, dnsmasq, `ssh/10-lab.conf`, `app/docker-compose.yml`, and `systemd/lab-app.service`.
-- Not written yet: `08-backup`, `09-monitoring`, `client/setup-client.sh`, `tests/verify.sh`, and the README.
+## Status (2026-11-21, after reboot test)
+**All 11 task sections are implemented and verified.**
+- **Server:** `lab-server` 192.168.56.10. After the reboot, `healthcheck` showed 25/25 OK with nothing started by hand.
+- **Client:** `lab-client` 192.168.56.20. `tests/verify.sh` showed 31/31 PASS after the server reboot.
+- **Failure drills:** 9 drills run (README §11), all detected by `healthcheck` and fixed.
+- **Backup and restore demos:** a project file, a Gitea repo and an nginx config were each deleted or broken and restored.
+- **Remaining:** remove the temporary `/etc/sudoers.d/99-claude-temp` on both VMs (with confirmation), then tune the VirtualBox resources (see Risks).
 
 ## Requirement → deliverable map
 | Task section | Deliverable | How it's verified |
