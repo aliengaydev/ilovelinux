@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# healthcheck — швидкий загальний стан lab-server.
+# Встановлюється в /usr/local/bin/healthcheck. Запуск: sudo healthcheck  (або просто healthcheck — сам перезапуститься через sudo)
+#
+#   --no-color   без кольорів (для журналу/файлу)
+#   --save       записати результат у /var/lib/healthcheck/last.txt і підсумок у journal (для timer/MOTD)
+#   --quiet      показувати лише WARN/CRIT і підсумок
+#
+# Код виходу: 0 — все OK, 1 — є WARN (потребує уваги), 2 — є CRIT (щось не працює).
+[[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"
+set -uo pipefail
+export LC_ALL=C.UTF-8
+
+# ---- параметри ----
+LAB_IFACE=enp0s8; SERVER_IP=192.168.56.10; DOMAIN=student.lab
+SERVICES=(nginx docker dnsmasq lab-app)       # + ssh, ufw перевіряються окремо
+TIMERS=(lab-backup.timer healthcheck.timer)
+CONTAINERS=(lab-db lab-gitea)
+ALLOWED_PORTS=" 22 53 80 "                    # що може слухати на не-loopback адресах
+PROJECT_DIR=/srv/projects/devteam; PROJECT_GROUP=devteam
+BACKUP_DIR=/var/backups/lab
+DISK_WARN=80; DISK_CRIT=90
+MEM_WARN=15;  MEM_CRIT=5                      # % доступної памʼяті
+BACKUP_WARN_H=26; BACKUP_CRIT_H=50
+STATE_DIR=/var/lib/healthcheck
+
+COLOR=1; SAVE=0; QUIET=0
+for a in "$@"; do case $a in
+  --no-color) COLOR=0 ;; --save) SAVE=1; COLOR=0 ;; --quiet) QUIET=1 ;;
+  -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac; done
+[[ -t 1 ]] || COLOR=0
+
+if (( COLOR )); then G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'; else G= Y= R= B= N=; fi
+N_OK=0; N_WARN=0; N_CRIT=0; REPORT=""
+emit() { REPORT+="$1"$'\n'; printf '%s\n' "$1"; }
+res() {   # res OK|WARN|CRIT <назва> <повідомлення>
+  local lvl=$1 name=$2 msg=$3 c
+  case $lvl in OK) c=$G; N_OK=$((N_OK+1)) ;; WARN) c=$Y; N_WARN=$((N_WARN+1)) ;; *) c=$R; N_CRIT=$((N_CRIT+1)) ;; esac
+  (( QUIET )) && [[ $lvl == OK ]] && return 0
+  emit "$(printf '  %s[%-4s]%s %-18s %s' "$c" "$lvl" "$N" "$name" "$msg")"
+}
+section() { (( QUIET )) || emit "${B}$1${N}"; }
+D() { timeout 8 docker "$@" 2>/dev/null; }
+
+emit "${B}healthcheck: $(hostname) — $(date '+%F %T')${N}"
+
+# ---------------- 1. Ресурси ----------------
+section "Ресурси"
+read -r l1 l5 _ < /proc/loadavg; cpus=$(nproc)
+lvl=$(awk -v l="$l5" -v c="$cpus" 'BEGIN{print (l>2*c)?"CRIT":(l>c)?"WARN":"OK"}')
+res "$lvl" load "load 1m/5m: $l1/$l5 на $cpus CPU"
+mt=$(awk '/^MemTotal/{print $2}' /proc/meminfo); ma=$(awk '/^MemAvailable/{print $2}' /proc/meminfo)
+mp=$(( ma * 100 / mt )); lvl=OK; (( mp < MEM_WARN )) && lvl=WARN; (( mp < MEM_CRIT )) && lvl=CRIT
+res "$lvl" memory "доступно ${mp}% ($((ma/1024)) з $((mt/1024)) MiB)"
+st=$(awk '/^SwapTotal/{print $2}' /proc/meminfo); sf=$(awk '/^SwapFree/{print $2}' /proc/meminfo)
+if (( st > 0 )); then sp=$(( (st - sf) * 100 / st )); lvl=OK; (( sp > 50 )) && lvl=WARN; res "$lvl" swap "використано ${sp}%"; fi
+
+# ---------------- 2. Файлові системи ----------------
+section "Файлові системи"
+while read -r tgt pc ip av; do
+  pc=${pc%\%}; ip=${ip%\%}; [[ $ip == - ]] && ip=0
+  lvl=OK; (( pc >= DISK_WARN || ip >= DISK_WARN )) && lvl=WARN; (( pc >= DISK_CRIT || ip >= DISK_CRIT )) && lvl=CRIT
+  res "$lvl" "fs $tgt" "зайнято ${pc}%, inodes ${ip}%, вільно $av"
+done < <(df -h --output=target,pcent,ipcent,avail / /var/lib/docker "$BACKUP_DIR" /srv 2>/dev/null | tail -n +2 | sort -u)
+
+# ---------------- 3. Сервіси ----------------
+section "Сервіси (active / enabled для reboot)"
+svc_check() {   # svc_check <назва> <unit для active> <unit для enabled>
+  local name=$1 au=$2 eu=$3 a e
+  a=$(systemctl is-active "$au" 2>/dev/null); e=$(systemctl is-enabled "$eu" 2>/dev/null)
+  if [[ $a != active ]]; then res CRIT "$name" "$au: $a (journalctl -u $au -n 30)"
+  elif [[ $e != enabled ]]; then res WARN "$name" "працює, але $eu: $e — не стартує після reboot"
+  else res OK "$name" "active, enabled"; fi
+}
+if systemctl is-active -q ssh.service || systemctl is-active -q ssh.socket; then
+  e=$(systemctl is-enabled ssh.socket 2>/dev/null)
+  [[ $e == enabled ]] || e=$(systemctl is-enabled ssh.service 2>/dev/null)
+  [[ $e == enabled ]] && res OK ssh "active, enabled" || res WARN ssh "працює, але не enabled — не стартує після reboot"
+else res CRIT ssh "ні ssh.socket, ні ssh.service не активні"; fi
+for s in "${SERVICES[@]}"; do svc_check "$s" "$s.service" "$s.service"; done
+for t in "${TIMERS[@]}"; do svc_check "${t%.timer} timer" "$t" "$t"; done
+if ufw status 2>/dev/null | grep -q '^Status: active'; then res OK ufw "firewall активний"
+else res CRIT ufw "firewall вимкнений — сервер відкритий"; fi
+failed=$(systemctl --failed --plain --no-legend 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
+[[ -z $failed ]] && res OK "failed units" "немає" || res WARN "failed units" "$failed"
+
+# ---------------- 4. Мережа ----------------
+section "Мережа"
+if ip -4 -br addr show "$LAB_IFACE" 2>/dev/null | grep -q "$SERVER_IP/"; then
+  res OK "$LAB_IFACE" "$(ip -br addr show "$LAB_IFACE" | awk '{print $2, $3}')"
+else res CRIT "$LAB_IFACE" "немає адреси $SERVER_IP ($(ip -br addr show "$LAB_IFACE" 2>/dev/null | awk '{print $2, $3}'))"; fi
+a=$(timeout 4 dig +short +time=2 +tries=1 @"$SERVER_IP" "app.$DOMAIN" A 2>/dev/null | tail -1)
+[[ $a == "$SERVER_IP" ]] && res OK "dns (dnsmasq)" "app.$DOMAIN -> $a" || res CRIT "dns (dnsmasq)" "app.$DOMAIN @${SERVER_IP} -> '${a:-немає відповіді}'"
+a=$(getent hosts "app.$DOMAIN" | awk '{print $1; exit}')
+[[ $a == "$SERVER_IP" ]] && res OK "dns (resolver)" "резолвер сервера бачить app.$DOMAIN" || res WARN "dns (resolver)" "getent app.$DOMAIN -> '${a:-нічого}' (resolvectl status $LAB_IFACE)"
+ufw_rules=$(ufw status 2>/dev/null)
+for p in 22 53 80; do
+  if grep -qE "^$p(/(tcp|udp))?[[:space:]].*(DENY|REJECT)" <<<"$ufw_rules"; then res CRIT "ufw :$p" "є DENY/REJECT правило (ufw status numbered)"
+  elif ! grep -qE "^$p(/(tcp|udp))?[[:space:]].*(ALLOW|LIMIT)" <<<"$ufw_rules"; then res CRIT "ufw :$p" "немає правила ALLOW — клієнти не підключаться"
+  fi
+done
+exposed=""
+while read -r addr; do
+  port=${addr##*:}; host=${addr%:*}
+  [[ $host == 127.* || $host == "[::1]" || $host == *%lo ]] && continue
+  [[ $ALLOWED_PORTS == *" $port "* ]] || exposed+="$addr "
+done < <(ss -tlnH | awk '{print $4}')
+[[ -z $exposed ]] && res OK "exposed ports" "назовні слухають лише 22/53/80" || res WARN "exposed ports" "неочікувані: $exposed"
+
+# ---------------- 5. Контейнери ----------------
+section "Контейнери"
+if ! D info >/dev/null; then res CRIT docker "Docker daemon не відповідає"; else
+  for c in "${CONTAINERS[@]}"; do
+    info=$(D inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.RestartCount}}|{{.State.ExitCode}}' "$c") \
+      || { res CRIT "$c" "контейнер не існує (docker compose --project-directory /opt/lab-app up -d)"; continue; }
+    IFS='|' read -r st hl rc ec <<<"$info"
+    if [[ $st != running ]]; then res CRIT "$c" "$st (exit $ec) — docker logs $c"
+    elif [[ $hl == unhealthy ]]; then res CRIT "$c" "running, але unhealthy — docker inspect $c"
+    elif [[ $hl == starting ]]; then res WARN "$c" "запускається (health: starting)"
+    elif (( rc > 3 )); then res WARN "$c" "healthy, але перезапускався $rc разів"
+    else res OK "$c" "running, health=$hl"; fi
+  done
+  # перевіряємо мережевий шлях app -> db лише коли gitea запущена, інакше висновок хибний
+  if [[ $(D inspect -f '{{.State.Running}}' lab-gitea) != true ]]; then :
+  elif D exec lab-gitea nc -z -w2 db 5432 >/dev/null; then res OK "app -> db" "gitea бачить db:5432"
+  else res CRIT "app -> db" "gitea не може зʼєднатися з db:5432 (docker network inspect lab-backend)"; fi
+fi
+
+# ---------------- 6. Застосунок і web ----------------
+section "Застосунок / web"
+TMPB=$(mktemp); trap 'rm -f "$TMPB"' EXIT
+http() { curl -s -m 5 -o "$TMPB" -w '%{http_code} %{time_total}' "$@" 2>/dev/null || echo "000 0"; }
+read -r code t <<<"$(http http://127.0.0.1:3000/api/healthz)"
+if [[ $code == 200 ]] && grep -q '"pass"' "$TMPB"; then res OK "gitea backend" "127.0.0.1:3000 healthz pass (${t}s)"
+else res CRIT "gitea backend" "127.0.0.1:3000 -> HTTP $code"; fi
+read -r code t <<<"$(http "http://app.$DOMAIN/api/healthz")"
+if [[ $code == 200 ]]; then
+  lvl=$(awk -v t="$t" 'BEGIN{print (t>2)?"WARN":"OK"}'); res "$lvl" "app.$DOMAIN" "HTTP 200 через nginx (${t}s)"
+else res CRIT "app.$DOMAIN" "HTTP $code через nginx (tail /var/log/nginx/app.error.log)"; fi
+read -r code t <<<"$(http "http://www.$DOMAIN/")"
+if [[ $code == 200 ]] && grep -q 'KH-24' "$TMPB"; then res OK "www.$DOMAIN" "HTTP 200, сторінка студента"
+else res CRIT "www.$DOMAIN" "HTTP $code"; fi
+
+# ---------------- 7. Дані: проєкт і backup ----------------
+section "Дані"
+if [[ -d $PROJECT_DIR ]]; then
+  m=$(stat -c '%a %U:%G' "$PROJECT_DIR")
+  if [[ $m == "2770 root:$PROJECT_GROUP" ]] && getfacl -p "$PROJECT_DIR" 2>/dev/null | grep -q "^default:group:$PROJECT_GROUP:rwx"; then
+    res OK "project area" "$PROJECT_DIR $m + default ACL"
+  else res WARN "project area" "$PROJECT_DIR: $m (очікується 2770 root:$PROJECT_GROUP + default ACL)"; fi
+else res CRIT "project area" "$PROJECT_DIR не існує"; fi
+if [[ -e $BACKUP_DIR/latest/MANIFEST.txt ]]; then
+  age=$(( ($(date +%s) - $(stat -c %Y "$BACKUP_DIR/latest/MANIFEST.txt")) / 3600 ))
+  lvl=OK; (( age >= BACKUP_WARN_H )) && lvl=WARN; (( age >= BACKUP_CRIT_H )) && lvl=CRIT
+  res "$lvl" backup "остання копія $(readlink "$BACKUP_DIR/latest") (${age} год тому), всього $(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*' | wc -l)"
+else res CRIT backup "немає жодної резервної копії"; fi
+r=$(systemctl show -p Result --value lab-backup.service 2>/dev/null)
+[[ $r == success || -z $r ]] || res CRIT "backup job" "останній запуск lab-backup: $r (journalctl -u lab-backup)"
+
+# ---------------- Підсумок ----------------
+if (( N_CRIT )); then s="${R}${B}КРИТИЧНО — потрібне втручання${N}"; rc=2
+elif (( N_WARN )); then s="${Y}${B}ПОТРЕБУЄ УВАГИ${N}"; rc=1
+else s="${G}${B}OK — система в нормі${N}"; rc=0; fi
+emit ""
+emit "СТАН: $s  (OK: $N_OK, WARN: $N_WARN, CRIT: $N_CRIT)"
+
+if (( SAVE )); then
+  install -d -m 755 "$STATE_DIR"
+  printf '%s' "$REPORT" > "$STATE_DIR/last.txt.tmp" && mv "$STATE_DIR/last.txt.tmp" "$STATE_DIR/last.txt"
+fi
+exit $rc

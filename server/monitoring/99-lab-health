@@ -1,0 +1,8 @@
+#!/bin/sh
+# /etc/update-motd.d/99-lab-health — показує останній результат healthcheck при вході
+f=/var/lib/healthcheck/last.txt
+[ -r "$f" ] || exit 0
+age=$(( ($(date +%s) - $(stat -c %Y "$f")) / 60 ))
+echo
+echo "=== lab-server healthcheck (${age} хв тому; повний звіт: sudo healthcheck) ==="
+grep -E '\[(WARN|CRIT)\]|СТАН:' "$f"

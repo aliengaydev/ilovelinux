@@ -1,0 +1,10 @@
+[Unit]
+Description=Lab server health check
+Documentation=file:///usr/local/bin/healthcheck
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/healthcheck --save --quiet
+SyslogIdentifier=healthcheck
+# 1 = WARN, 2 = CRIT — це результат перевірки, а не збій самого юніта
+SuccessExitStatus=1 2
