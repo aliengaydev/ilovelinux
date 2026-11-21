@@ -1,0 +1,11 @@
+[Unit]
+Description=Lab backup (Gitea DB + data, /srv/projects, configs)
+Documentation=file:///usr/local/sbin/lab-backup
+Requires=docker.service
+After=docker.service lab-app.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lab-backup
+Nice=10
+IOSchedulingClass=idle

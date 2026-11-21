@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily lab backup at 02:30
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# якщо сервер був вимкнений о 02:30 — копія виконається після старту
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

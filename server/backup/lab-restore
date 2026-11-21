@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# lab-restore — відновлення з резервних копій lab-backup.
+#
+#   sudo lab-restore list                         список копій
+#   sudo lab-restore show                         MANIFEST і вміст копії
+#   sudo lab-restore project <шлях|all>           файл/каталог з /srv/projects (з ACL і правами)
+#   sudo lab-restore config  <шлях>               файл/каталог конфігурації, напр. /etc/nginx/sites-available/app.conf
+#   sudo lab-restore db                           БД Gitea з pg_dump
+#   sudo lab-restore gitea-data                   volume з репозиторіями Gitea
+#   sudo lab-restore app                          db + gitea-data (узгоджений стан застосунку)
+#
+# Опції (перед командою):
+#   --from <копія>   назва каталогу копії (за замовчуванням latest)
+#   --to <каталог>   для project/config: розпакувати туди для перегляду, не чіпаючи систему
+#   --yes            не питати підтвердження
+set -euo pipefail
+
+BACKUP_DIR=${BACKUP_DIR:-/var/backups/lab}
+APP_DIR=${APP_DIR:-/opt/lab-app}
+GITEA_VOLUME=lab_gitea-data
+DB_CONTAINER=lab-db
+GITEA_CONTAINER=lab-gitea
+HELPER_IMAGE=postgres:16.6-alpine
+
+FROM=latest; TO=""; YES=0
+log() { echo "[lab-restore] $*"; }
+die() { echo "[lab-restore] ERROR: $*" >&2; exit 1; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+confirm() {
+  (( YES )) && return 0
+  read -r -p "[lab-restore] $1 Продовжити? [y/N] " a
+  [[ $a == [yYтТ]* ]] || die "скасовано"
+}
+[[ $EUID -eq 0 ]] || die "run as root (sudo)"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --from) FROM=$2; shift 2 ;;
+    --to)   TO=$2;   shift 2 ;;
+    --yes|-y) YES=1; shift ;;
+    -h|--help) usage ;;
+    *) break ;;
+  esac
+done
+CMD=${1:-}; ARG=${2:-}
+[[ -n $CMD ]] || usage 1
+
+SRC=$(readlink -f "$BACKUP_DIR/$FROM" 2>/dev/null || true)
+if [[ $CMD != list ]]; then
+  [[ -d $SRC ]] || die "копію '$FROM' не знайдено в $BACKUP_DIR (див. lab-restore list)"
+  (cd "$SRC" && sha256sum --quiet -c SHA256SUMS) || die "контрольні суми не збігаються — копія пошкоджена"
+  log "копія: $(basename "$SRC")"
+fi
+
+wait_healthy() {
+  local c=$1 s
+  for _ in $(seq 1 60); do
+    s=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$c" 2>/dev/null || echo missing)
+    [[ $s == healthy ]] && return 0
+    sleep 2
+  done
+  die "$c не став healthy (останній стан: $s)"
+}
+
+# Витягнути шлях з архіву: у систему (з підтвердженням) або в --to
+restore_path() {
+  local archive=$1 path=$2 member
+  member=${path#/}; member=${member%/}
+  # не через пайп у grep -q: з pipefail ранній вихід grep дає SIGPIPE у tar і хибне "відсутній"
+  local listing; listing=$(tar -tzf "$archive")
+  grep -qE "^${member//./\\.}(/|$)" <<<"$listing" || die "'/$member' відсутній у $(basename "$archive")"
+  if [[ -n $TO ]]; then
+    install -d -m 700 "$TO"
+    tar --acls --xattrs -xzpf "$archive" -C "$TO" "$member"
+    log "розпаковано в $TO/$member (система не змінена)"
+  else
+    confirm "'/$member' буде перезаписано версією з копії."
+    tar --acls --xattrs -xzpf "$archive" -C / "$member"
+    log "відновлено /$member"
+    ls -la "/$member" 2>/dev/null | head -5
+  fi
+}
+
+restore_db() {
+  confirm "БД Gitea буде замінена станом з копії (поточні зміни після копії буде втрачено)."
+  log "зупиняю gitea"; docker stop -t 20 "$GITEA_CONTAINER" >/dev/null 2>&1 || true
+  if ! docker inspect "$DB_CONTAINER" &>/dev/null || [[ $(docker inspect -f '{{.State.Running}}' "$DB_CONTAINER") != true ]]; then
+    log "піднімаю контейнер БД"; docker compose --project-directory "$APP_DIR" up -d db
+  fi
+  wait_healthy "$DB_CONTAINER"
+  log "pg_restore --clean"
+  docker exec -i "$DB_CONTAINER" sh -c \
+    'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --single-transaction' \
+    < "$SRC/db.dump"
+}
+
+restore_gitea_data() {
+  confirm "Volume $GITEA_VOLUME буде повністю замінено вмістом копії."
+  log "зупиняю gitea"; docker stop -t 20 "$GITEA_CONTAINER" >/dev/null 2>&1 || true
+  docker volume inspect "$GITEA_VOLUME" &>/dev/null || docker volume create "$GITEA_VOLUME" >/dev/null
+  docker run --rm --network none --entrypoint sh \
+    -v "$GITEA_VOLUME":/data -v "$SRC":/backup:ro "$HELPER_IMAGE" \
+    -c 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf /backup/gitea-data.tar.gz -C /data'
+  log "gitea-data відновлено"
+}
+
+start_app() {
+  log "запускаю застосунок"
+  docker compose --project-directory "$APP_DIR" up -d >/dev/null
+  wait_healthy "$GITEA_CONTAINER"
+  log "gitea healthy"
+}
+
+case $CMD in
+  list)
+    printf '%-20s %8s  %s\n' BACKUP SIZE CREATED
+    for d in $(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*' -printf '%f\n' 2>/dev/null | sort -r); do
+      printf '%-20s %8s  %s\n' "$d" "$(du -sh "$BACKUP_DIR/$d" | cut -f1)" "$(sed -n 's/^created: *//p' "$BACKUP_DIR/$d/MANIFEST.txt" 2>/dev/null)"
+    done
+    echo "latest -> $(readlink "$BACKUP_DIR/latest" 2>/dev/null || echo '-')" ;;
+  show)
+    cat "$SRC/MANIFEST.txt"; echo "projects:"; tar -tzvf "$SRC/projects.tar.gz" | awk '{print "  "$1, $2, $6}' ;;
+  project)
+    [[ -n $ARG ]] || die "вкажіть шлях, напр. /srv/projects/devteam/plan.txt або all"
+    [[ $ARG == all ]] && ARG=/srv/projects
+    [[ $ARG == /srv/projects* ]] || die "шлях має бути всередині /srv/projects"
+    restore_path "$SRC/projects.tar.gz" "$ARG" ;;
+  config)
+    [[ -n $ARG ]] || die "вкажіть шлях, напр. /etc/nginx/sites-available/app.conf"
+    restore_path "$SRC/config.tar.gz" "$ARG"
+    [[ -z $TO ]] && log "не забудьте перевірити й перезапустити сервіс (nginx -t && systemctl reload nginx тощо)" ;;
+  db)         restore_db; start_app ;;
+  gitea-data) restore_gitea_data; start_app ;;
+  app)        YES_SAVED=$YES; confirm "Буде відновлено БД і gitea-data."; YES=1
+              restore_gitea_data; restore_db; YES=$YES_SAVED; start_app ;;
+  *) usage 1 ;;
+esac

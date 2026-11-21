@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# lab-backup — резервна копія важливих даних lab-server.
+# Встановлюється в /usr/local/sbin/lab-backup, запускається lab-backup.timer (щодня 02:30)
+# або вручну: sudo lab-backup
+#
+# Що копіюється (кожна копія — окремий каталог $BACKUP_DIR/YYYY-MM-DD_HHMM):
+#   db.dump           — PostgreSQL (pg_dump, custom format) — дані Gitea
+#   gitea-data.tar.gz — volume gitea-data: git-репозиторії, вкладення, app.ini (конфіг застосунку)
+#   projects.tar.gz   — /srv/projects разом з правами, ACL і setgid
+#   config.tar.gz     — конфіги системи й сервісів (nginx, ssh, dnsmasq, ufw, systemd, compose+.env,
+#                       користувачі/групи) — для відновлення сервера
+#   MANIFEST.txt, SHA256SUMS — опис і контрольні суми
+set -euo pipefail
+umask 077
+
+BACKUP_DIR=${BACKUP_DIR:-/var/backups/lab}
+APP_DIR=${APP_DIR:-/opt/lab-app}
+GITEA_VOLUME=lab_gitea-data
+DB_CONTAINER=lab-db
+GITEA_CONTAINER=lab-gitea
+HELPER_IMAGE=postgres:16.6-alpine     # вже є локально; має busybox tar
+KEEP_LAST=${KEEP_LAST:-7}             # останні N копій
+KEEP_WEEKLY=${KEEP_WEEKLY:-4}         # + по одній (найновішій) на тиждень ще за N тижнів
+
+CONFIG_PATHS=(
+  etc/nginx etc/ssh/sshd_config.d etc/dnsmasq.d etc/ufw
+  etc/systemd/system/lab-app.service etc/systemd/system/lab-backup.service
+  etc/systemd/system/lab-backup.timer etc/systemd/system/healthcheck.service
+  etc/systemd/system/healthcheck.timer etc/update-motd.d/99-lab-health
+  etc/NetworkManager/system-connections etc/hosts etc/hostname etc/login.defs
+  etc/passwd etc/group etc/shadow etc/gshadow
+  opt/lab-app var/www/lab-server
+  usr/local/sbin/lab-backup usr/local/sbin/lab-restore usr/local/bin/healthcheck
+)
+
+log() { echo "[lab-backup] $*"; }
+die() { echo "[lab-backup] ERROR: $*" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || die "run as root"
+
+exec 9>/run/lab-backup.lock
+flock -n 9 || die "інша копія вже виконується"
+
+TS=$(date +%F_%H%M)
+DEST="$BACKUP_DIR/$TS"
+[[ -e $DEST ]] && DEST="${DEST}$(date +%S)"
+install -d -m 700 "$BACKUP_DIR" "$DEST"
+START=$(date +%s)
+log "початок → $DEST"
+
+# 1. База даних — pg_dump консистентний і без зупинки
+docker inspect -f '{{.State.Running}}' "$DB_CONTAINER" 2>/dev/null | grep -q true || die "контейнер $DB_CONTAINER не працює"
+docker exec "$DB_CONTAINER" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DEST/db.dump"
+[[ -s $DEST/db.dump ]] || die "db.dump порожній"
+log "db.dump $(du -h "$DEST/db.dump" | cut -f1)"
+
+# 2. Дані Gitea — зупиняємо gitea на кілька секунд, щоб файли репозиторіїв були узгоджені з БД
+gitea_was_running=$(docker inspect -f '{{.State.Running}}' "$GITEA_CONTAINER" 2>/dev/null || echo false)
+restart_gitea() { [[ $gitea_was_running == true ]] && docker start "$GITEA_CONTAINER" >/dev/null || true; }
+trap restart_gitea EXIT
+[[ $gitea_was_running == true ]] && docker stop -t 20 "$GITEA_CONTAINER" >/dev/null
+docker run --rm --network none --entrypoint tar \
+  -v "$GITEA_VOLUME":/data:ro -v "$DEST":/backup \
+  "$HELPER_IMAGE" czf /backup/gitea-data.tar.gz -C /data .
+restart_gitea; trap - EXIT
+log "gitea-data.tar.gz $(du -h "$DEST/gitea-data.tar.gz" | cut -f1)"
+
+# 3. Проєктні дані з ACL/xattr/правами
+tar --acls --xattrs -czpf "$DEST/projects.tar.gz" -C / srv/projects
+log "projects.tar.gz $(du -h "$DEST/projects.tar.gz" | cut -f1)"
+
+# 4. Конфігурація (лише наявні шляхи)
+existing=(); for p in "${CONFIG_PATHS[@]}"; do [[ -e /$p ]] && existing+=("$p"); done
+tar --acls --xattrs -czpf "$DEST/config.tar.gz" -C / "${existing[@]}"
+log "config.tar.gz $(du -h "$DEST/config.tar.gz" | cut -f1)"
+
+# 5. Перевірка цілісності + опис
+for f in "$DEST"/*.tar.gz; do gzip -t "$f" || die "пошкоджений архів $f"; done
+docker exec -i "$DB_CONTAINER" pg_restore -l < "$DEST/db.dump" > /dev/null || die "db.dump не читається pg_restore"
+{
+  echo "host:      $(hostname)"
+  echo "created:   $(date -Is)"
+  echo "duration:  $(( $(date +%s) - START ))s"
+  echo "gitea:     $(docker inspect -f '{{.Config.Image}}' "$GITEA_CONTAINER")"
+  echo "postgres:  $(docker inspect -f '{{.Config.Image}}' "$DB_CONTAINER")"
+  echo "files:"; (cd "$DEST" && du -h db.dump *.tar.gz | sed 's/^/  /')
+} > "$DEST/MANIFEST.txt"
+(cd "$DEST" && sha256sum db.dump *.tar.gz > SHA256SUMS)
+chmod 600 "$DEST"/*     # архів з контейнера створюється з 0644 — вирівнюємо
+ln -sfn "$(basename "$DEST")" "$BACKUP_DIR/latest"
+
+# 6. Ротація: останні KEEP_LAST + найновіша копія кожного з KEEP_WEEKLY попередніх тижнів
+mapfile -t all < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*' -printf '%f\n' | sort -r)
+weeks=" "; weekly=0      # тижні, вже представлені збереженими копіями
+for i in "${!all[@]}"; do
+  name=${all[$i]}
+  wk=$(date -d "${name:0:10}" +%G-W%V)
+  if (( i < KEEP_LAST )); then weeks+="$wk "; continue; fi
+  if [[ $weeks != *" $wk "* ]] && (( weekly < KEEP_WEEKLY )); then
+    weeks+="$wk "; weekly=$((weekly + 1)); continue
+  fi
+  log "ротація: видаляю $name"; rm -rf -- "${BACKUP_DIR:?}/$name"
+done
+
+log "готово за $(( $(date +%s) - START ))s, копій: $(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*' | wc -l), розмір: $(du -sh "$BACKUP_DIR" | cut -f1)"

@@ -49,7 +49,7 @@ Every commit message starts with `step N:`. **I ask before:** IP/hostname change
 - [x] **3. Users & projects (sec. 3).** `03-users.sh`. *Verify:* the ACL/setgid tests listed above. → commit/push
 - [x] **4. Web + DNS + app + proxy (sec. 4–6).** `04-web.sh`, `05-dns.sh`, `06-app.sh`. *Verify* from the client and with a persistence test. → commit/push
 - [x] **5. Firewall (sec. 7).** Show the current `ufw status`, then run `07-firewall.sh`. *Verify:* nmap and ss. → commit/push
-- [ ] **6. Backup (sec. 8).** Write `server/backup/{lab-backup,lab-restore}`, the systemd service/timer and `08-backup.sh`. *Verify* by restoring a deleted project file and a deleted Gitea repo. → commit/push
+- [x] **6. Backup (sec. 8).** Write `server/backup/{lab-backup,lab-restore}`, the systemd service/timer and `08-backup.sh`. *Verify* by restoring a deleted project file and a deleted Gitea repo. → commit/push
 - [ ] **7. Monitoring (sec. 9).** Write `server/monitoring/healthcheck`, the timer, the MOTD hook and `09-monitoring.sh`. *Verify:* all OK, then simulate a fault. → commit/push
 - [ ] **8. Failure drills + runbook (sec. 10).** Inject and fix: nginx stopped, DB container stopped, broken dnsmasq config, `ufw deny 80`, wrong permissions on the project dir, disk filled with `fallocate`. Then write the runbook in the README. → commit/push
 - [ ] **9. Reboot test (sec. 11).** Write `tests/verify.sh`. After you confirm, reboot → healthcheck plus verify from the client. → commit/push
