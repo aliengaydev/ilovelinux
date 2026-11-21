@@ -47,7 +47,7 @@ Every commit message starts with `step N:`. **I ask before:** IP/hostname change
 - [x] **1. Network (sec. 1).** `00-bootstrap.sh` (packages), then `01-network.sh` on the server. After you run `ssh-copy-id`, I run `client/setup-client.sh` on the client. It sets .20, `lab-client`, DNS `~student.lab` and installs nmap/dig/curl, and it runs under `nohup` because the SSH session drops when the IP changes. Then I reconnect on .20. *Verify:* ping both ways. → commit/push
 - [x] **2. Admin + SSH (sec. 2).** Generate ed25519 keys on the client (for sysadmin, dev1, dev2) → copy the `.pub` files into `server/keys/`, then run `02-admin-ssh.sh`. *Verify* from the client. → commit/push
 - [x] **3. Users & projects (sec. 3).** `03-users.sh`. *Verify:* the ACL/setgid tests listed above. → commit/push
-- [ ] **4. Web + DNS + app + proxy (sec. 4–6).** `04-web.sh`, `05-dns.sh`, `06-app.sh`. *Verify* from the client and with a persistence test. → commit/push
+- [x] **4. Web + DNS + app + proxy (sec. 4–6).** `04-web.sh`, `05-dns.sh`, `06-app.sh`. *Verify* from the client and with a persistence test. → commit/push
 - [ ] **5. Firewall (sec. 7).** Show the current `ufw status`, then run `07-firewall.sh`. *Verify:* nmap and ss. → commit/push
 - [ ] **6. Backup (sec. 8).** Write `server/backup/{lab-backup,lab-restore}`, the systemd service/timer and `08-backup.sh`. *Verify* by restoring a deleted project file and a deleted Gitea repo. → commit/push
 - [ ] **7. Monitoring (sec. 9).** Write `server/monitoring/healthcheck`, the timer, the MOTD hook and `09-monitoring.sh`. *Verify:* all OK, then simulate a fault. → commit/push
