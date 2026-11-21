@@ -1,0 +1,16 @@
+# lab-server aliases
+Host lab-admin
+    HostName lab-server.student.lab
+    User sysadmin
+    IdentityFile ~/.ssh/lab_sysadmin
+    IdentitiesOnly yes
+Host lab-dev1
+    HostName lab-server.student.lab
+    User dev1
+    IdentityFile ~/.ssh/lab_dev1
+    IdentitiesOnly yes
+Host lab-dev2
+    HostName lab-server.student.lab
+    User dev2
+    IdentityFile ~/.ssh/lab_dev2
+    IdentitiesOnly yes

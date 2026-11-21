@@ -26,6 +26,7 @@ install_keys "$ADMIN_USER"
   || die "у $ADMIN_USER немає authorized_keys — не вимикаю парольний вхід, щоб не втратити доступ"
 
 install_cfg ssh/10-lab.conf /etc/ssh/sshd_config.d/10-lab.conf
+install -d -m 755 /run/sshd   # з socket activation каталог зʼявляється лише при старті sshd
 sshd -t || die "sshd -t: помилка конфігурації"
 systemctl enable --now ssh.socket 2>/dev/null || systemctl enable --now ssh.service
 systemctl restart ssh.service 2>/dev/null || true
