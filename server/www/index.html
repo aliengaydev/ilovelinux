@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>student.lab — <!--# echo var="hostname" --></title>
+<style>
+  :root { color-scheme: light dark; --fg:#1d232b; --bg:#f4f6f8; --card:#fff; --muted:#5d6b7a; --acc:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e6e9ee; --bg:#12161b; --card:#1b2129; --muted:#9aa6b3; --acc:#6ea0ff; } }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); display:grid; place-items:center; min-height:100vh; padding:16px; box-sizing:border-box; }
+  main { background:var(--card); border-radius:12px; padding:32px 36px; max-width:560px; width:100%; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  h1 { margin:0 0 4px; font-size:1.6rem; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:8px 20px; margin:0; }
+  dt { color:var(--muted); } dd { margin:0; font-weight:600; }
+  code { font-family:ui-monospace, monospace; }
+  a { color:var(--acc); }
+  footer { margin-top:24px; font-size:.85rem; color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Oleksandr Cherniavskyi</h1>
+  <p class="sub">Група KH-24 · Linux Infrastructure Challenge</p>
+  <dl>
+    <dt>Сервер (hostname)</dt><dd><code><!--# echo var="hostname" --></code></dd>
+    <dt>Адреса сервера</dt><dd><code><!--# echo var="server_addr" --></code></dd>
+    <dt>Запитаний домен</dt><dd><code><!--# echo var="host" --></code></dd>
+    <dt>Ваш IP</dt><dd><code><!--# echo var="remote_addr" --></code></dd>
+    <dt>Час на сервері</dt><dd><!--# config timefmt="%Y-%m-%d %H:%M:%S %Z" --><!--# echo var="date_local" --></dd>
+  </dl>
+  <footer>Застосунок команди: <a href="http://app.student.lab/">app.student.lab</a> · web-сервіс: nginx</footer>
+</main>
+</body>
+</html>

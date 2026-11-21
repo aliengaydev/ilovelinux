@@ -1,0 +1,194 @@
+Linux Infrastructure Challenge
+Мета
+
+Завдання призначене для студентів, які вже мають практичний досвід роботи з Linux та бажають продемонструвати знання курсу без послідовного виконання всіх лабораторних робіт.
+
+Виконання завдання передбачає самостійне проєктування, розгортання та адміністрування Linux-інфраструктури.
+
+Ви самостійно обираєте:
+
+    Linux distributions;
+    virtualization/containerization platform;
+    software products;
+    network architecture;
+    способи конфігурації;
+    засоби автоматизації.
+
+Готові покрокові інструкції до завдання не надаються.
+Scenario
+
+Ви отримали завдання адміністратора невеликої software-компанії.
+
+Компанії необхідне ізольоване Linux-середовище для внутрішньої команди розробки. У середовищі повинні працювати корпоративний web-сервіс та application, якою користуються співробітники.
+
+Інфраструктура має бути придатною для віддаленого адміністрування, мати розмежування доступу, базові механізми security, backup та monitoring.
+
+Розгорніть таку систему.
+1. Infrastructure
+
+Інфраструктура повинна містити щонайменше два окремих Linux instances, які виконують різні ролі.
+
+Один із них виконує роль сервера.
+
+Другий використовується як client/workstation та повинен дозволяти перевірити роботу сервісів сервера з іншого host.
+
+Instances повинні взаємодіяти через IP network.
+
+Студент самостійно визначає topology та network configuration.
+2. Administration
+
+Server повинен підтримувати secure remote administration.
+
+Адміністратор не повинен використовувати root account для звичайної роботи.
+
+Повинен існувати окремий administrative account з можливістю виконання необхідних privileged operations.
+
+Remote authentication повинна використовувати сучасний механізм, який не вимагає передачі administrator password при кожному підключенні.
+3. Users and access
+
+На server працює команда розробників.
+
+Необхідно організувати:
+
+    administrator account;
+    щонайменше два developer accounts;
+    shared project area;
+    private user data.
+
+Developers повинні мати можливість спільно працювати з project files.
+
+Нові project files повинні автоматично отримувати правильну group affiliation та бути доступними іншим членам project team відповідно до встановленої access policy.
+
+Користувач, який не належить до project team, не повинен отримувати доступ до project data.
+4. Web service
+
+На server повинен працювати web service.
+
+Він повинен:
+
+    автоматично запускатися після restart server;
+    бути доступним із client/workstation;
+    бути доступним за hostname/domain name, а не лише за IP address;
+    мати власну configuration;
+    вести logs.
+
+Web service повинен відображати сторінку, яка дозволяє однозначно визначити студента та server, на якому вона працює.
+5. Application
+
+Розгорніть окрему web application.
+
+Це може бути:
+
+    CMS;
+    власна проста application;
+    готова open-source application.
+
+Application повинна використовувати database для persistent data.
+
+Application та database повинні працювати в containers.
+
+Application data не повинні втрачатися після restart/recreation containers.
+
+Database не повинна бути без необхідності безпосередньо доступною client machines.
+6. Service integration
+
+Користувач повинен звертатися до application за зрозумілим network name, наприклад:
+
+app.student.lab
+
+ 
+
+Зовнішній web service повинен приймати client requests і передавати їх application.
+
+Internal application architecture та internal application ports не повинні бути необхідні користувачу для доступу до application.
+7. Network security
+
+Server не повинен надавати network access до всіх запущених services.
+
+Необхідно визначити:
+
+    які services повинні бути доступними client/workstation;
+    які services потрібні тільки локально;
+    які services використовуються тільки для internal communication між application components.
+
+Network access повинен бути обмежений відповідно до цього рішення.
+
+Студент повинен бути здатний пояснити чому кожний externally accessible service є доступним.
+8. Backup and recovery
+
+Необхідно реалізувати backup важливих даних системи.
+
+Backup повинен включати щонайменше:
+
+    application configuration;
+    project data;
+    дані, необхідні для відновлення application.
+
+Backup повинен створюватися автоматично за визначеним schedule.
+
+Зберігання одного backup-файла без можливості продемонструвати recovery не вважається виконанням вимоги.
+
+Студент повинен продемонструвати відновлення видаленого або пошкодженого об'єкта з backup.
+9. Monitoring / Health Check
+
+Адміністратор не хоче вручну перевіряти кожний component системи.
+
+Створіть власний mechanism, який дозволяє швидко визначити загальний стан server.
+
+Він повинен щонайменше перевіряти:
+
+    system resources;
+    filesystem capacity;
+    critical system services;
+    containers;
+    availability web application.
+
+Результат повинен дозволяти адміністратору швидко визначити, чи потребує система уваги.
+10. Failure recovery
+
+Infrastructure повинна бути побудована таким чином, щоб administrator міг діагностувати проблеми.
+
+Під час захисту викладач може внести одну або декілька несправностей у систему або запропонувати студенту сценарій несправності.
+
+Наприклад:
+
+    application перестала бути доступною;
+    один із services не запускається;
+    application не може звернутися до database;
+    network name перестав працювати;
+    client не може підключитися до server;
+    developer втратив доступ до project;
+    filesystem закінчується;
+    container завершив роботу;
+    network access блокується;
+    після reboot один із components не запустився.
+
+Студент повинен самостійно:
+
+визначити симптом → локалізувати проблему → визначити root cause → усунути проблему → перевірити відновлення service.
+11. Reboot Test
+
+Після повного restart server система повинна повернутися у працездатний стан без ручного запуску кожного component.
+
+Після reboot повинні бути доступними необхідні:
+
+    network configuration;
+    remote administration;
+    system services;
+    web service;
+    containers/application;
+    persistent data.
+
+Захист
+
+Захист складається з чотирьох частин:
+
+1. Architecture
+
+2. Demonstration
+
+3. Linux knowledge check
+
+4. Troubleshooting challenge
+
+Використання AI, документації, Stack Overflow, man pages тощо під час створення infrastructure дозволено.

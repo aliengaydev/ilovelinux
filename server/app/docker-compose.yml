@@ -1,0 +1,72 @@
+# /opt/lab-app/docker-compose.yml — Gitea (застосунок) + PostgreSQL (БД)
+# Секрети — у /opt/lab-app/.env (0600, не в git). Приклад: .env.example
+name: lab-app
+
+services:
+  db:
+    image: postgres:16.6-alpine
+    container_name: lab-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [backend]            # БД — тільки у внутрішній мережі, порт НЕ публікується
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  gitea:
+    image: gitea/gitea:1.22.6
+    container_name: lab-gitea
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: db:5432
+      GITEA__database__NAME: ${POSTGRES_DB}
+      GITEA__database__USER: ${POSTGRES_USER}
+      GITEA__database__PASSWD: ${POSTGRES_PASSWORD}
+      GITEA__server__DOMAIN: app.student.lab
+      GITEA__server__ROOT_URL: http://app.student.lab/
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__DISABLE_SSH: "true"        # git по SSH не потрібен — лише HTTP через nginx
+      GITEA__server__START_SSH_SERVER: "false"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__log__MODE: console
+      GITEA__log__LEVEL: Info
+    volumes:
+      - gitea-data:/data
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "127.0.0.1:3000:3000"      # лише loopback: доступ ззовні тільки через nginx
+    networks: [backend, frontend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+networks:
+  backend:
+    name: lab-backend
+    internal: true                 # немає виходу назовні й доступу з хоста по маршруту
+  frontend:
+    name: lab-frontend
+
+volumes:
+  pg-data:
+    name: lab_pg-data
+  gitea-data:
+    name: lab_gitea-data

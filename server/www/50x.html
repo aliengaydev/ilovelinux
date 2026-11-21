@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="uk"><head><meta charset="utf-8"><title>Застосунок недоступний</title></head>
+<body style="font-family:system-ui,sans-serif;padding:2rem">
+<h1>502/503 — застосунок недоступний</h1>
+<p>nginx на <b><!--# echo var="hostname" --></b> працює, але backend (Gitea, 127.0.0.1:3000) не відповідає.</p>
+<p>Адміністратору: <code>sudo healthcheck</code>, <code>sudo docker compose -f /opt/lab-app/docker-compose.yml ps</code>,
+<code>tail /var/log/nginx/app.error.log</code>.</p>
+</body></html>
