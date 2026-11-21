@@ -437,7 +437,29 @@ sudo healthcheck --quiet       # що саме не так
 
 ## 12. Reboot-тест
 
-_Заповнюється після кроку 9 (див. PLAN.md)._
+**Що забезпечує автозапуск:**
+
+| Компонент | Механізм |
+|---|---|
+| Мережа enp0s8 192.168.56.10 | профіль NM `lab-hostonly`, `autoconnect yes`, статична адреса |
+| Віддалене адміністрування | `ssh.socket` enabled |
+| Firewall | `ufw.service` enabled, правила в `/etc/ufw/user*.rules` |
+| DNS | `dnsmasq.service` enabled; `bind-dynamic` — не залежить від того, чи вже піднявся інтерфейс |
+| Web-сервіс | `nginx.service` enabled |
+| Контейнери | `docker.service` enabled → `lab-app.service` (`After=docker.service network-online.target`) виконує `docker compose up -d --wait` |
+| Persistent data | named volumes `lab_pg-data`, `lab_gitea-data`; `/srv/projects` на диску |
+| Backup / моніторинг | `lab-backup.timer` (`Persistent=true`), `healthcheck.timer` (`OnBootSec=2min`) |
+
+**Результат reboot-тесту (2026-11-21, `sudo reboot`, без жодних ручних дій):**
+- Завантаження: `Startup finished in 9.5s (kernel) + 50.5s (userspace) = 1min`.
+- Ланцюжок: `NetworkManager @5.6s → docker @10.9s (+6.8s) → lab-app.service (+32.4s, чекає healthy)`. Контейнери `lab-db` і `lab-gitea` стартували через ~40 с після завантаження ядра, обидва `healthy`.
+- `sudo healthcheck` через 2 хв після старту: **25/25 OK, exit 0**. Мережа, ssh, ufw, dnsmasq, nginx, docker, lab-app, обидва таймери active+enabled, DNS, app→db, HTTP www/app, ACL проєкту, backup.
+- Дані на місці: repo `gitadmin/demo-project` є, файли `/srv/projects/devteam` з тими самими правами.
+- `journalctl -b -p err` — лише повідомлення робочого столу/графіки (`vmwgfx … unsupported hypervisor` — графічний адаптер VMSVGA у VirtualBox; на сервіси не впливає, лікується вибором VBoxSVGA).
+- Клієнт після свого перезапуску сам піднявся як `lab-client` / 192.168.56.20 з DNS 192.168.56.10.
+- **`tests/verify.sh` з клієнта (сервер `up 15 minutes`, boot 17:50:04): усі 31 перевірок PASS** — мережа, DNS (включно з інтернет-DNS через NAT), сторінка студента з hostname, застосунок і збережений repo, відкриті лише 22/53/80, SSH лише ключем (пароль і root відхилено), спільна робота dev1/dev2, приватні home, свіжий healthcheck OK, спрацювання ufw limit.
+
+> Практична примітка: обидві VM з робочим столом COSMIC на одному хості можуть «підвисати», коли хост перевантажений (сервер з 4 vCPU під час завантаження Docker). Рекомендація: сервер 2 vCPU, клієнт 1–2 vCPU, сумарно менше за фізичні ядра хоста, 3D-прискорення вимкнено, графіка VBoxSVGA; сервер запускати першим.
 
 ## 13. Структура репозиторію і розгортання
 

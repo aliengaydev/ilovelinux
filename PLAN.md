@@ -52,7 +52,7 @@ Every commit message starts with `step N:`. **I ask before:** IP/hostname change
 - [x] **6. Backup (sec. 8).** Write `server/backup/{lab-backup,lab-restore}`, the systemd service/timer and `08-backup.sh`. *Verify* by restoring a deleted project file and a deleted Gitea repo. → commit/push
 - [x] **7. Monitoring (sec. 9).** Write `server/monitoring/healthcheck`, the timer, the MOTD hook and `09-monitoring.sh`. *Verify:* all OK, then simulate a fault. → commit/push
 - [x] **8. Failure drills + runbook (sec. 10).** Inject and fix: nginx stopped, DB container stopped, broken dnsmasq config, `ufw deny 80`, wrong permissions on the project dir, disk filled with `fallocate`. Then write the runbook in the README. → commit/push
-- [ ] **9. Reboot test (sec. 11).** Write `tests/verify.sh`. After you confirm, reboot → healthcheck plus verify from the client. → commit/push
+- [x] **9. Reboot test (sec. 11).** Write `tests/verify.sh`. After you confirm, reboot → healthcheck plus verify from the client. → commit/push
 - [ ] **10. Finish.** Final Ukrainian README: architecture, decisions, port/access table, user matrix, backup and monitoring guide, runbook, defense demo checklist. Tick off PLAN.md, final commit/push, and remove `99-claude-temp` from both VMs (asking first).
 
 ## Risks / notes
