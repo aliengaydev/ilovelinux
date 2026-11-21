@@ -3,7 +3,8 @@
 source "$(dirname "$0")/lib.sh"; need_root
 
 install_cfg dnsmasq/student.lab.conf /etc/dnsmasq.d/student.lab.conf
-dnsmasq --test --conf-file=/etc/dnsmasq.conf
+# УВАГА: без --conf-dir dnsmasq --test НЕ читає /etc/dnsmasq.d (каталог додає systemd-юніт) і завжди каже OK
+dnsmasq --test --conf-dir=/etc/dnsmasq.d,.dpkg-dist,.dpkg-old,.dpkg-new
 systemctl enable dnsmasq >/dev/null 2>&1
 systemctl restart dnsmasq
 # Сам сервер теж питає dnsmasq для ~student.lab (налаштовано у профілі NM в 01-network.sh)
